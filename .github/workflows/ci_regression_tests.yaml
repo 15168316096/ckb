@@ -1,0 +1,116 @@
+name: ci_regression_tests
+concurrency:
+  group: ci_regression_tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [master, develop, 'rc/**']
+  schedule:
+    # Run regression tests daily at 02:00 UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  RUSTFLAGS: -D warnings
+
+jobs:
+  regression_verification_tests:
+    name: Verification module regression tests
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ github.repository_owner == 'nervosnetwork' && 'self-hosted-ci-ubuntu-20.04' || 'ubuntu-22.04' }}
+    steps:
+      - name: Free up disk space
+        if: github.repository_owner != 'nervosnetwork'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libclang-dev build-essential
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v4
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ci-${{ runner.os }}-cargo-regression-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ci-${{ runner.os }}-cargo-regression-
+      - name: Run verification regression tests
+        run: |
+          cargo nextest run --locked -p ckb-verification --verbose
+        shell: bash
+      - name: Run chain regression tests
+        run: |
+          cargo nextest run --locked -p ckb-chain --verbose
+        shell: bash
+
+  regression_security_audit:
+    name: Security regression audit
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Run cargo-deny advisories check
+        run: cargo deny check advisories
+      - name: Run cargo-deny bans check
+        run: cargo deny check bans
+
+  regression_tx_pool_tests:
+    name: Transaction pool regression tests
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ github.repository_owner == 'nervosnetwork' && 'self-hosted-ci-ubuntu-20.04' || 'ubuntu-22.04' }}
+    steps:
+      - name: Free up disk space
+        if: github.repository_owner != 'nervosnetwork'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libclang-dev build-essential
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - uses: actions/checkout@v4
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ci-${{ runner.os }}-cargo-regression-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ci-${{ runner.os }}-cargo-regression-
+      - name: Run tx-pool regression tests
+        run: |
+          cargo nextest run --locked -p ckb-tx-pool --verbose
+        shell: bash
+      - name: Run script regression tests
+        run: |
+          cargo nextest run --locked -p ckb-script --verbose
+        shell: bash
+
+  ci_regression_tests:
+    name: ci_regression_tests
+    needs: [regression_verification_tests, regression_security_audit, regression_tx_pool_tests]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: All regression tests passed
+        run: echo "All regression test jobs completed successfully"
